@@ -1,0 +1,8 @@
+RIPE Atlas is the RIPE NCC's global network of probes and anchors that
+actively measure Internet connectivity and reachability.  Anyone can
+access the measurement data, and probe hosts earn credits to run their
+own measurements.
+
+This is the software probe: the probe scripts and the measurement
+applets (ping, traceroute, DNS, HTTP, TLS, NTP) that turn a host into a
+RIPE Atlas probe once it is registered with the RIPE NCC.

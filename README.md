@@ -22,7 +22,7 @@
 This project contains the probe code that powers software probes.
 
 We release binary packages for the `amd64` variants of Debian 11 / 12 / 13, (Oracle) Enterprise Linux 8 / 9 / 10, and `arm64` variant of Raspberry Pi OS 12 / 13.<br>
-The source code also allows for building of an OpenWrt 22.03 package.
+The source code also allows for building of an OpenWrt 22.03 package, and builds and runs on FreeBSD.
 
 ## Installation
 
@@ -55,6 +55,41 @@ grep -q "$(sha256sum "$REPO_PKG")" CHECKSUMS && echo "Success: checksum matches"
 sudo rpm -Uvh "$REPO_PKG" && rm "$REPO_PKG"
 sudo dnf install ripe-atlas-probe
 ```
+
+### FreeBSD
+
+There are no binary packages for FreeBSD yet. The probe builds from source with the base system compiler and OpenSSL:
+
+```sh
+# Building dependencies and users
+pkg install git autoconf automake libtool gmake
+pw groupadd ripe-atlas
+pw useradd ripe-atlas -g ripe-atlas -d /nonexistent -s /usr/sbin/nologin
+pw useradd ripe-atlas-measurement -g ripe-atlas -d /nonexistent -s /usr/sbin/nologin
+
+# Building and installing
+git clone https://github.com/RIPE-NCC/ripe-atlas-software-probe.git
+cd ripe-atlas-software-probe
+autoreconf -iv
+./configure --prefix=/usr/local --localstatedir=/var --disable-systemd --with-user=ripe-atlas --with-group=ripe-atlas --with-measurement-user=ripe-atlas-measurement
+gmake
+gmake install
+
+# Starting the probe, which creates its key on the first start
+sysrc ripe_atlas_enable=YES
+service ripe_atlas start
+
+# The public key to register the probe with (see the FAQ)
+cat /usr/local/etc/ripe-atlas/probe_key.pub
+```
+
+Keep the host clock in sync with ntpd or chronyd: the probe runs unprivileged and cannot set the clock, and the controller rejects uploads from a probe whose clock is off.
+
+FreeBSD has no file capabilities, so the measurement `busybox` is installed setuid root, executable by group `ripe-atlas` only.
+For the measurements that need raw sockets or BPF captures it forks a small broker that keeps root, chroots to `/dev` and hands out only those sockets, while the measurement itself drops to `ripe-atlas-measurement`.
+
+On FreeBSD the configuration files live in `/usr/local/etc/ripe-atlas/` instead of `/etc/ripe-atlas/`, and the probe logs to syslog with the tag `ripe-atlas`.
+A FreeBSD port and a container image are described in the [building instructions](BUILD.md#freebsd).
 
 ### Other platforms
 

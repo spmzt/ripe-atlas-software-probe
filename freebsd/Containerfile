@@ -1,0 +1,50 @@
+# RIPE Atlas software probe on FreeBSD (podman with ocijail), see BUILD.md.
+#
+#   podman build -f freebsd/Containerfile -t ripe-atlas-probe .
+#
+# The build context is the top of a clean source tree.  The userland of the
+# base images must not be newer than the kernel of the host.
+
+ARG FREEBSD_VERSION=16.snap
+
+FROM ghcr.io/freebsd/freebsd-toolchain:${FREEBSD_VERSION} AS build
+RUN env ASSUME_ALWAYS_YES=yes pkg bootstrap -r FreeBSD-ports && \
+    pkg install -y -r FreeBSD-ports autoconf automake gmake libtool && \
+    pkg create -o /pkgs FreeBSD-ssh
+COPY . /src
+WORKDIR /src
+# The configure arguments and script mode of the port
+# net-mgmt/ripe-atlas-probe.
+RUN autoreconf -fi && \
+    ./configure --prefix=/usr/local --localstatedir=/var \
+	--disable-chown --disable-systemd \
+	--with-user=ripe-atlas --with-group=ripe-atlas \
+	--with-measurement-user=ripe-atlas-measurement && \
+    gmake && gmake install DESTDIR=/stage INSTALL_SCRIPT="install -m 0555"
+
+FROM ghcr.io/freebsd/freebsd-runtime:${FREEBSD_VERSION}
+# Owners and modes as in the package of the port.
+RUN --mount=type=nullfs,from=build,source=/,target=/build \
+    /build/usr/local/sbin/pkg-static add /build/pkgs/FreeBSD-ssh-*.pkg && \
+    tar -C /build/stage -cf - usr var/spool | tar -C / -xpf - && \
+    pw groupadd ripe-atlas && \
+    pw useradd ripe-atlas -g ripe-atlas -c "RIPE Atlas probe" \
+	-d /nonexistent -s /usr/sbin/nologin && \
+    pw useradd ripe-atlas-measurement -g ripe-atlas \
+	-c "RIPE Atlas measurements" -d /nonexistent -s /usr/sbin/nologin && \
+    cd /usr/local/libexec/ripe-atlas/measurement && \
+    chown root:ripe-atlas busybox && chmod 4750 busybox && \
+    chown -R ripe-atlas:ripe-atlas /usr/local/etc/ripe-atlas \
+	/var/spool/ripe-atlas/crons /var/spool/ripe-atlas/data && \
+    chmod 0770 /usr/local/etc/ripe-atlas && \
+    find /var/spool/ripe-atlas/crons /var/spool/ripe-atlas/data \
+	-type d -exec chmod 2775 {} + && \
+    install -d -o ripe-atlas-measurement -g ripe-atlas -m 0775 \
+	/var/run/ripe-atlas/pids /var/run/ripe-atlas/status
+
+VOLUME /usr/local/etc/ripe-atlas /var/run/ripe-atlas/status /var/spool/ripe-atlas
+
+USER ripe-atlas
+ENV HOME=/var/spool/ripe-atlas
+WORKDIR /var/spool/ripe-atlas
+ENTRYPOINT ["/usr/local/sbin/ripe-atlas"]

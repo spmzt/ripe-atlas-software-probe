@@ -1,0 +1,77 @@
+etc/rc.d/ripe_atlas
+@sample(ripe-atlas,ripe-atlas,644) etc/ripe-atlas/mode.sample
+libexec/ripe-atlas/measurement/atlasinit
+libexec/ripe-atlas/measurement/buddyinfo
+@(root,ripe-atlas,4750) libexec/ripe-atlas/measurement/busybox
+libexec/ripe-atlas/measurement/condmv
+libexec/ripe-atlas/measurement/date
+libexec/ripe-atlas/measurement/dfrm
+libexec/ripe-atlas/measurement/eooqd
+libexec/ripe-atlas/measurement/eperd
+libexec/ripe-atlas/measurement/evhttpget
+libexec/ripe-atlas/measurement/evntp
+libexec/ripe-atlas/measurement/evping
+libexec/ripe-atlas/measurement/evsslgetcert
+libexec/ripe-atlas/measurement/evtdig
+libexec/ripe-atlas/measurement/evtraceroute
+libexec/ripe-atlas/measurement/httppost
+libexec/ripe-atlas/measurement/onlyuptime
+libexec/ripe-atlas/measurement/perd
+libexec/ripe-atlas/measurement/rchoose
+libexec/ripe-atlas/measurement/rptaddrs
+libexec/ripe-atlas/measurement/rptra6
+libexec/ripe-atlas/measurement/rptuptime
+libexec/ripe-atlas/measurement/rxtxrpt
+libexec/ripe-atlas/measurement/telnetd
+libexec/ripe-atlas/scripts/array.lib.sh
+libexec/ripe-atlas/scripts/atlas_log.lib.sh
+libexec/ripe-atlas/scripts/class.lib.sh
+libexec/ripe-atlas/scripts/common-pre.sh
+libexec/ripe-atlas/scripts/common.sh
+libexec/ripe-atlas/scripts/config.sh
+libexec/ripe-atlas/scripts/freebsd-functions.sh
+libexec/ripe-atlas/scripts/generic-ATLAS.sh
+libexec/ripe-atlas/scripts/generic-common.sh
+libexec/ripe-atlas/scripts/generic-reginit.sh
+libexec/ripe-atlas/scripts/json.lib.sh
+libexec/ripe-atlas/scripts/linux-functions.sh
+libexec/ripe-atlas/scripts/paths.lib.sh
+libexec/ripe-atlas/scripts/reg_servers.sh.dev
+libexec/ripe-atlas/scripts/reg_servers.sh.prod
+libexec/ripe-atlas/scripts/reg_servers.sh.test
+libexec/ripe-atlas/scripts/reginit.sh
+libexec/ripe-atlas/scripts/resolvconf
+libexec/ripe-atlas/scripts/support.lib.sh
+sbin/ripe-atlas
+share/ripe-atlas/FIRMWARE_APPS_VERSION
+share/ripe-atlas/known_hosts.reg
+share/ripe-atlas/measurement.conf
+@dir(ripe-atlas,ripe-atlas,770) etc/ripe-atlas
+@dir /var/spool/ripe-atlas
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/2
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/3
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/4
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/5
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/6
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/7
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/8
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/9
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/10
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/11
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/12
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/13
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/14
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/15
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/16
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/17
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/18
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/19
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/20
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/crons/main
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/data
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/data/new
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/data/oneoff
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/data/out
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/data/out/ooq
+@dir(ripe-atlas,ripe-atlas,2775) /var/spool/ripe-atlas/data/out/ooq10

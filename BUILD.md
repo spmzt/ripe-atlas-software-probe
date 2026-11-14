@@ -112,6 +112,59 @@ service ripe-atlas enable
 service ripe-atlas start
 ```
 
+## FreeBSD
+
+To build and install directly from source, see [README.md](README.md#freebsd). The `freebsd/` directory holds a port and a container image.
+
+### Port
+
+`freebsd/port/` is the port `net-mgmt/ripe-atlas-probe`. It builds the GitHub release tarball named by `DISTVERSION`, so it only works for releases that contain FreeBSD support.
+
+```sh
+mkdir -p /usr/ports/net-mgmt/ripe-atlas-probe
+cp -R freebsd/port/ /usr/ports/net-mgmt/ripe-atlas-probe/
+cd /usr/ports/net-mgmt/ripe-atlas-probe
+make makesum    # the port carries no distinfo, it is generated per release
+make install
+# Follow the instructions printed after installation to register and start your probe
+```
+
+The users `ripe-atlas` and `ripe-atlas-measurement` and the group `ripe-atlas` need entries in the ports tree's `UIDs` and `GIDs` files.
+
+### Container
+
+`freebsd/Containerfile` builds a FreeBSD image of the probe from the source tree for podman with the `ocijail` runtime. Set up podman as the FreeBSD documentation describes (ZFS container storage, pf for the NAT of container networks). The userland of the base images must not be newer than the host kernel; choose it with `--build-arg FREEBSD_VERSION=` (default `16.snap`).
+
+```sh
+# A dual-stack network, the default podman network is IPv4 only
+podman network create --ipv6 --subnet 10.89.0.0/24 --subnet fd8a:71a0:c0::/64 atlas
+
+# Building, from the top of a clean source tree
+podman build --network atlas -f freebsd/Containerfile -t ripe-atlas-probe .
+
+# Running the probe; the first start creates the probe key in the etc volume
+podman run -d --name ripe-atlas --restart=always --network atlas --device /dev/bpf \
+    -v ripe-atlas-etc:/usr/local/etc/ripe-atlas \
+    -v ripe-atlas-status:/var/run/ripe-atlas/status \
+    -v ripe-atlas-spool:/var/spool/ripe-atlas \
+    ripe-atlas-probe
+
+# The public key to register the probe with (see the FAQ in README.md)
+podman exec ripe-atlas cat /usr/local/etc/ripe-atlas/probe_key.pub
+```
+
+The volumes hold the probe key and configuration (`etc`), the controller state (`status`), and the crontabs and results not yet sent (`spool`). The probe logs to the container log (`podman logs`). To restart the container after a reboot, set `sysrc podman_enable=YES`.
+
+The probe runs as `ripe-atlas`, as the `rc.d` service does on a host; the measurement `busybox` is setuid root and hands raw sockets to the measurements through its broker (see [README.md](README.md#freebsd)). The container is granted:
+
+- raw sockets: `ocijail` creates every jail with `allow.raw_sockets`, which ICMP and UDP measurements need;
+- `/dev/bpf` (`--device /dev/bpf`): TCP traceroute receives its replies through BPF. Without it, TCP traceroute fails with `tcp capture failed` and all other measurements work.
+
+> [!NOTE]
+> Behind the pf NAT of a podman network, TCP traceroute shows only the host and the first router, then `*`, and the destination's reply as hop 255.
+> pf drops the ICMP time exceeded errors for all but the first probe of a flow, because each probe moves the state's TCP window past the sequence number the error quotes (they count as `state-mismatch` in `pfctl -si`).
+> ICMP and UDP traceroute show all hops, and so does TCP traceroute with `--network host`.
+
 ## Manual
 
 The software probe can be built and installed manually using `autoconf` tooling, but we recommend against it.

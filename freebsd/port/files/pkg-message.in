@@ -1,0 +1,28 @@
+[
+{ type: install
+  message: <<EOM
+A RIPE Atlas probe only takes part in measurements once it is
+registered with the RIPE NCC.
+
+1. Enable and start the probe; on the first start it creates its key:
+
+   sysrc ripe_atlas_enable=YES
+   service ripe_atlas start
+
+2. Register the probe with the public key
+   %%PREFIX%%/etc/ripe-atlas/probe_key.pub at:
+
+   https://atlas.ripe.net/register/swprobe
+
+Keep the host clock in sync with ntpd or chronyd: the probe runs
+unprivileged and cannot set the clock, and the controller rejects
+uploads from a probe whose clock is off.
+
+The probe logs to syslog with the tag ripe-atlas (facility daemon).
+The measurement applets in %%PREFIX%%/libexec/ripe-atlas/measurement
+are setuid root, executable by group ripe-atlas only: a small root
+helper hands them raw sockets and BPF captures while the measurements
+run as user ripe-atlas-measurement.
+EOM
+}
+]
