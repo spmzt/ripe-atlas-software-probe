@@ -42,7 +42,7 @@ STATE_DIR=$ATLAS_DATA; export STATE_DIR
 # Files
 REG_SERVERS_SOURCE=$ATLAS_SCRIPTS/reg_servers.sh
 
-. $ATLAS_SCRIPTS/linux-functions.sh
+. $ATLAS_SCRIPTS/@os_functions@
 
 # Get ethernet address
 get_ether_addr

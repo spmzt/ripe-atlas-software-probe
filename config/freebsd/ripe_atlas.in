@@ -1,0 +1,144 @@
+#!/bin/sh
+
+# PROVIDE: ripe_atlas
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+#
+# Add the following line to /etc/rc.conf to enable the RIPE Atlas probe:
+#
+# ripe_atlas_enable="YES"
+#
+# Optional settings:
+# ripe_atlas_main (path):	Main loop to supervise.
+#				Default: @sbindir@/ripe-atlas
+# ripe_atlas_user (user):	User the main loop runs as.
+#				Default: @ripe_atlas_user@
+# ripe_atlas_syslog_facility:	Facility for the main loop's output.
+#				Default: daemon
+
+. /etc/rc.subr
+
+name="ripe_atlas"
+rcvar="ripe_atlas_enable"
+
+load_rc_config $name
+
+: ${ripe_atlas_enable:="NO"}
+: ${ripe_atlas_main:="@sbindir@/ripe-atlas"}
+: ${ripe_atlas_user:="@ripe_atlas_user@"}
+: ${ripe_atlas_syslog_facility:="daemon"}
+: ${ripe_atlas_chdir:="@atlas_spooldir@"}
+
+ripe_atlas_measurement_user="@ripe_atlas_measurement@"
+ripe_atlas_group="@ripe_atlas_group@"
+ripe_atlas_sysconfdir="@atlas_sysconfdir@"
+ripe_atlas_rundir="@atlas_rundir@"
+
+# rc.subr starts daemon(8) as ${name}_user; daemon supervises the main loop
+# and holds the pidfile.  The main loop runs unprivileged, the measurement
+# applets as the user that owns the installed busybox binary.
+pidfile="/var/run/${name}.pid"
+procname="/usr/sbin/daemon"
+command="/usr/sbin/daemon"
+command_args="-r -S -l ${ripe_atlas_syslog_facility} -T ripe-atlas \
+    -t ripe-atlas -P ${pidfile} \
+    /usr/bin/env HOME=@atlas_spooldir@ ${ripe_atlas_main}"
+required_files="${ripe_atlas_sysconfdir}/mode"
+
+start_precmd="ripe_atlas_prestart"
+stop_cmd="ripe_atlas_stop"
+
+ripe_atlas_prestart()
+{
+	local mode
+
+	mode=$(cat "${ripe_atlas_sysconfdir}/mode")
+	case "${mode}" in
+	dev|test|prod)
+		;;
+	*)
+		err 1 "invalid probe mode '${mode}' in" \
+		    "${ripe_atlas_sysconfdir}/mode (dev, test or prod)"
+		;;
+	esac
+
+	# /var/run is cleared at boot; recreate what the install created.
+	install -d -o root -g wheel -m 0755 "${ripe_atlas_rundir}" &&
+	install -d -o "${ripe_atlas_measurement_user}" \
+	    -g "${ripe_atlas_group}" -m 0775 \
+	    "${ripe_atlas_rundir}/pids" "${ripe_atlas_rundir}/status" ||
+	    return 1
+
+	# daemon(8) runs as the user and must be able to write its pidfile.
+	install -o "${ripe_atlas_user}" -g "${ripe_atlas_group}" -m 0644 \
+	    /dev/null "${pidfile}"
+}
+
+# Print the pid in file $1 if it names a live process whose real user is
+# one of the probe users.
+_ripe_atlas_pid_from()
+{
+	local pid ruser
+
+	[ -f "$1" ] || return 1
+	pid=$(tail -n 1 "$1")
+	case "${pid}" in
+	''|*[!0-9]*)
+		return 1
+		;;
+	esac
+	ruser=$(ps -o ruser= -p "${pid}" 2>/dev/null) || return 1
+	case "${ruser}" in
+	"${ripe_atlas_user}"|"${ripe_atlas_measurement_user}")
+		echo "${pid}"
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+# The supervisor is a session and process group leader.  The main loop and
+# its plain children (sleep, reginit.sh, ...) stay in that group.  The
+# applets it starts (perd, eperd, eooqd, telnetd, rptra6) daemonize into
+# their own sessions and record their pids in the pids directory; the
+# registration ssh records its pid in status/con_keep_pid.vol.
+ripe_atlas_stop()
+{
+	local f i pid pids pgid
+
+	pgid=$(check_pidfile "${pidfile}" "${procname}")
+	if [ -z "${pgid}" ]; then
+		echo "${name} not running? (check ${pidfile})."
+		return 1
+	fi
+	echo "Stopping ${name}."
+
+	pids="${pgid}"
+	for f in "${ripe_atlas_rundir}"/pids/*.vol \
+	    "${ripe_atlas_rundir}/status/con_keep_pid.vol"; do
+		pid=$(_ripe_atlas_pid_from "${f}") &&
+		    pids="${pids} ${pid}"
+	done
+
+	# The supervisor first, so that it stops restarting the main loop.
+	# It only exits once nothing holds the main loop's output open,
+	# hence the rest of the group.
+	kill -TERM "${pgid}"
+	kill -TERM -- "-${pgid}" 2>/dev/null
+	kill -TERM ${pids} 2>/dev/null
+
+	for i in 1 2 3 4 5 6 7 8 9 10; do
+		pids=$( (ps -o pid= -p "$(echo ${pids} | tr ' ' ',')";
+		    pgrep -g "${pgid}") 2>/dev/null)
+		[ -n "${pids}" ] || break
+		sleep 1
+	done
+	if [ -n "${pids}" ]; then
+		warn "killing processes that ignored SIGTERM:" ${pids}
+		kill -KILL ${pids} 2>/dev/null
+	fi
+	rm -f "${pidfile}"
+}
+
+run_rc_command "$1"

@@ -27,6 +27,11 @@ atlas_scripts_SCRIPTS += \
                         arch/openwrt-hwprobe/openwrt-hwprobe-reginit.sh
 endif
 
+if HOST_FREEBSD
+atlas_scripts_SCRIPTS += \
+                        arch/freebsd/freebsd-functions.sh
+endif
+
 CLEANFILES = \
              paths.lib.sh \
              common.sh \

@@ -53,6 +53,19 @@ endif
 
 endif
 
+if HOST_FREEBSD
+rcddir = $(sysconfdir)/rc.d
+rcd_SCRIPTS = \
+			freebsd/ripe_atlas
+
+CLEANFILES += \
+	     freebsd/ripe_atlas
+
+freebsd/ripe_atlas:	freebsd/ripe_atlas.in
+	@rm -f $@
+	$(AM_V_GEN)$(SUBST_PATHS) $< > $@
+endif
+
 atlas_sysconf_DATA = \
 			common/mode
 

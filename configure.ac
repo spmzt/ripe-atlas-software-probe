@@ -16,6 +16,7 @@ freebsd*)
 	host_freebsd=false
 	;;
 esac
+AM_CONDITIONAL([HOST_FREEBSD], [test "x${host_freebsd}" = 'xtrue'])
 
 AC_ARG_ENABLE([hwprobe],
 	      [AS_HELP_STRING([--enable-hwprobe], [configure build specific for hardware probes @<:@default=no@:>@])],
@@ -31,6 +32,14 @@ else
 	probe_scripts_path=generic
 fi
 AC_SUBST(probe_scripts_path)
+
+# The shell functions for the operating system, used by the generic scripts
+if test "x${host_freebsd}" = 'xtrue'; then
+	os_functions=freebsd-functions.sh
+else
+	os_functions=linux-functions.sh
+fi
+AC_SUBST(os_functions)
 
 AC_ARG_ENABLE([chown],
 	      [AS_HELP_STRING([--enable-chown], [set permissions during install @<:@default=yes@:>@])],

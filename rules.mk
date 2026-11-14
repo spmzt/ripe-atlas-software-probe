@@ -25,6 +25,7 @@ SUBST_PATHS = sed \
              -e 's|@localedir[@]|$(localedir)|g' \
              -e 's|@localstatedir[@]|$(localstatedir)|g' \
              -e 's|@mandir[@]|$(mandir)|g' \
+             -e 's|@os_functions[@]|$(os_functions)|g' \
              -e 's|@prefix[@]|$(prefix)|g' \
              -e 's|@probe_scripts_path[@]|$(probe_scripts_path)|g' \
              -e 's|@ripe_atlas_user[@]|$(ripe_atlas_user)|g' \

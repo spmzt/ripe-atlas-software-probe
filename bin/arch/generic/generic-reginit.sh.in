@@ -28,7 +28,7 @@ if [ -z "$STATE_FILE" ] ; then
 fi
 
 . $ATLAS_SCRIPTS/$DEVICE_NAME-common.sh
-. $ATLAS_SCRIPTS/linux-functions.sh
+. $ATLAS_SCRIPTS/@os_functions@
 
 p_to_r_init()
 {
