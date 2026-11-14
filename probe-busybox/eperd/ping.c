@@ -46,6 +46,7 @@ struct linux_icmphdr
 
 #include "eperd.h"
 #include "atlas_path.h"
+#include "atlas_rawsock.h"
 
 #define SAFE_PREFIX_REL ATLAS_DATA_NEW_REL
 
@@ -1529,7 +1530,7 @@ static void ping_start2(void *state)
 
 		if (!pingstate->response_in)
 		{
-			if ((fd = socket(AF_INET, SOCK_RAW, p_proto)) == -1) {
+			if ((fd = atlas_rawsocket(AF_INET, p_proto)) == -1) {
 				/* Create an endpoint for communication
 				 * using raw socket for ICMP calls */
 				snprintf(line, sizeof(line),
@@ -1559,7 +1560,7 @@ static void ping_start2(void *state)
 
 		if (!pingstate->response_in)
 		{
-			if ((fd = socket(AF_INET6, SOCK_RAW, p_proto)) == -1) {
+			if ((fd = atlas_rawsocket(AF_INET6, p_proto)) == -1) {
 				snprintf(line, sizeof(line),
 					"{ " DBQ(error) ":"
 					DBQ(socket failed: %s) " }",

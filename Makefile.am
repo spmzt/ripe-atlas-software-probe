@@ -40,7 +40,17 @@ endif
 # Technically this hack belongs in probe-busybox, but it is here
 # because busybox is a different build system.
 install-exec-hook:
+if HOST_FREEBSD
+## No file capabilities: setuid root, the raw socket broker keeps root and
+## the measurements drop to the measurement user
+if DO_CHOWN
+	$(install_sh) -m 4750 -o root -g $(ripe_atlas_group) $(top_srcdir)/probe-busybox/busybox $(DESTDIR)/$(atlas_measurementdir)/busybox
+else
+	$(install_sh) $(top_srcdir)/probe-busybox/busybox $(DESTDIR)/$(atlas_measurementdir)/busybox
+endif
+else
 	$(install_sh) $(ATLAS_OWN_SUID_OPTS) $(ATLAS_OWN_MEAS_OPTS) $(top_srcdir)/probe-busybox/busybox $(DESTDIR)/$(atlas_measurementdir)/busybox
+endif
 if SETCAP_INSTALL
 	setcap cap_net_raw=ep $(DESTDIR)$(atlas_measurementdir)/busybox
 endif

@@ -1317,8 +1317,29 @@ static void tdig_send_query_callback(int unused UNUSED_PARAM, const short event 
 
 		if (af == AF_INET6 && qry->opt_ipv6_dest_option != 0)
 		{
+#ifdef __FreeBSD__
+			/* FreeBSD wants root (PRIV_NETINET_SETHDROPTS),
+			 * which the measurement dropped.  Report the error
+			 * instead of querying without the header.
+			 */
+			if (!qry->response_in && do_ipv6_option(fd,
+				1 /* dest */, qry->opt_ipv6_dest_option) == -1)
+			{
+				snprintf(line, DEFAULT_LINE_LENGTH,
+				"%s \"socket\" : \"destination option failed: %s\"",
+					qry->err.size ? ", " : "",
+					strerror(errno));
+				close(fd);
+				buf_add(&qry->err, line, strlen(line));
+				printReply (qry, 0, NULL);
+				free (outbuff);
+				outbuff = NULL;
+				return;
+			}
+#else
 			do_ipv6_option(fd, 1 /* dest */,
 				qry->opt_ipv6_dest_option);
+#endif
 		}
 
 		if (qry->opt_do_ttl)

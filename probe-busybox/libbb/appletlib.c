@@ -35,6 +35,7 @@
 #endif
 
 #include "atlas_path.h"
+#include "atlas_rawsock.h"
 
 /* Declare <applet>_main() */
 #define PROTOTYPES
@@ -612,6 +613,17 @@ static void check_suid(int applet_no)
 		 */
 		if (sct->m_mode & S_ISGID)
 			rgid = sct->m_ugid.gid;
+#  if defined(__FreeBSD__)
+		/* Setuid root (no file capabilities): start the raw socket
+		 * broker if the applet needs it and drop effective and
+		 * saved ids for good, keeping the real ones like the calls
+		 * below, which then change nothing.
+		 */
+		if (geteuid() == 0)
+			freebsd_privsep(freebsd_rawsock_mask(applet_no),
+				(sct->m_mode & S_ISUID) ? sct->m_ugid.uid : ruid,
+				rgid);
+#  endif
 		/* else: we will set egid = rgid, thus dropping sgid effect */
 		if (setresgid(-1, rgid, rgid))
 			bb_perror_msg_and_die("setresgid");
@@ -646,6 +658,14 @@ static void check_suid(int applet_no)
 		if (geteuid())
 			bb_error_msg_and_die("must be suid to work properly");
 	} else if (APPLET_SUID(applet_no) == BB_SUID_DROP) {
+#  if defined(__FreeBSD__)
+		/* Not in the config: run as the caller, with the broker
+		 * if the applet needs raw sockets (rptra6)
+		 */
+		if (geteuid() == 0)
+			freebsd_privsep(freebsd_rawsock_mask(applet_no),
+				ruid, rgid);
+#  endif
 		xsetgid(rgid);  /* drop all privileges */
 		xsetuid(ruid);
 	}
@@ -817,6 +837,15 @@ static int busybox_main(char **argv)
 		int use_symbolic_links;
 		const char *busybox;
 
+#  if defined(__FreeBSD__) && ENABLE_FEATURE_SUID
+		/* Setuid root: create the links as the caller, not as root
+		 * in whatever directory the caller names
+		 */
+		if (ruid != 0 && geteuid() == 0) {
+			xsetgid(getgid());
+			xsetuid(ruid);
+		}
+#  endif
 		busybox = xmalloc_readlink(bb_busybox_exec_path);
 		if (!busybox) {
 			/* bb_busybox_exec_path is usually "/proc/self/exe".

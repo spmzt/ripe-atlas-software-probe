@@ -57,6 +57,10 @@ struct udphdr
 #define ICMP_TIME_EXCEEDED	ICMP_TIMXCEED
 
 #include "freebsd_srcaddr.h"
+
+/* FreeBSD does not pass TCP segments to raw sockets */
+#include <net/bpf.h>
+#include "freebsd_tcpcap.h"
 #else
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
@@ -64,6 +68,7 @@ struct udphdr
 
 #include "eperd.h"
 #include "atlas_path.h"
+#include "atlas_rawsock.h"
 
 #define SAFE_PREFIX_REL ATLAS_DATA_NEW_REL
 
@@ -89,7 +94,11 @@ struct udphdr
 #define TCP_HDR		(sizeof(*tcphdr))
 
 #define BASE_PORT	(0x8000 + 666)
+#ifdef __FreeBSD__
+#define SRC_BASE_PORT	TCPCAP_SRC_BASE_PORT
+#else
 #define SRC_BASE_PORT	(20480)
+#endif
 #define MAX_DATA_SIZE   (4096)
 
 #define DBQ(str) "\"" #str "\""
@@ -190,6 +199,18 @@ struct trtstate
 	int socket_tcp;			/* Socket for sending and receiving
 					 * raw TCP */
 	struct event event_tcp;		/* Event for this socket */
+#ifdef __FreeBSD__
+	/* The replies come from BPF captures, one per interface they may
+	 * arrive on, instead of socket_tcp.  socket_tcpbind is a TCP
+	 * socket bound to our source address and port, which proves that
+	 * they are ours and keeps others off them while we capture.
+	 */
+	int socket_tcpbind;
+	struct tcpcap *tcpcap;
+	int ntcpcap;
+	struct tcpcap_seen *tcpcap_seen;	/* With more than one capture */
+	unsigned tcpcap_nseen;
+#endif
 
 	uint8_t last_response_hop;	/* Hop at which we last got something
 					 * back.
@@ -261,6 +282,40 @@ struct v6info
 	uint32_t seq;
 	struct timespec tv;
 };
+
+#ifdef __FreeBSD__
+/* The BPF capture of the replies on one interface */
+struct tcpcap
+{
+	struct trtstate *state;
+	int fd;
+	unsigned dlt;			/* Link type */
+	struct event event;
+};
+
+/* The last TCPCAP_SEEN replies the captures handed on, see tcpcap_copy */
+#define TCPCAP_SEEN		8
+#define TCPCAP_SEEN_USEC	10000
+struct tcpcap_seen
+{
+	struct tcpcap *cap;
+	struct timeval tv;		/* BPF time stamp */
+	size_t len;
+	u_char ip[128];			/* Start of the IP packet */
+};
+
+/* A reply from a BPF capture as ready_tcp_bpf hands it to ready_tcp4 or
+ * ready_tcp6, which find the packet itself in base->packet
+ */
+static struct
+{
+	struct trtstate *state;		/* Cleared when report() runs */
+	ssize_t len;
+	struct sockaddr_in6 remote;
+	int hlim;
+	int tclass;
+} tcpcap_pkt;
+#endif
 
 static int create_socket(struct trtstate *state, int do_tcp);
 static void ready_callback4(int __attribute((unused)) unused,
@@ -390,6 +445,9 @@ static void add_str(struct trtstate *state, const char *str)
 static void report(struct trtstate *state)
 {
 	int r;
+#ifdef __FreeBSD__
+	int i;
+#endif
 	FILE *fh;
 	const char *proto;
 	struct addrinfo *ai;
@@ -496,6 +554,26 @@ static void report(struct trtstate *state)
 		close(state->socket_tcp);
 		state->socket_tcp= -1;
 	}
+#ifdef __FreeBSD__
+	for (i= 0; i < state->ntcpcap; i++)
+	{
+		event_del(&state->tcpcap[i].event);
+		close(state->tcpcap[i].fd);
+	}
+	free(state->tcpcap);
+	state->tcpcap= NULL;
+	state->ntcpcap= 0;
+	free(state->tcpcap_seen);
+	state->tcpcap_seen= NULL;
+	if (state->socket_tcpbind != -1)
+	{
+		close(state->socket_tcpbind);
+		state->socket_tcpbind= -1;
+	}
+	/* Tell ready_tcp_bpf to stop: done() may free state */
+	if (tcpcap_pkt.state == state)
+		tcpcap_pkt.state= NULL;
+#endif
 
 	state->busy= 0;
 
@@ -545,9 +623,44 @@ static int set_tos(struct trtstate *state, int sock, int af, int inner)
 	return 0;
 }
 
+#ifdef __FreeBSD__
+/* Linux lets the measurement user, with cap_net_raw, set hop-by-hop and
+ * destination options.  FreeBSD wants root for that
+ * (PRIV_NETINET_SETHDROPTS), which the applet dropped.  Report the error
+ * instead of measuring without the header.
+ */
+static int set_ipv6_options(struct trtstate *state, int sock)
+{
+	int i;
+	unsigned size;
+	char line[80];
+
+	if (state->response_in)
+		return 0;
+	for (i= 0; i < 2; i++)
+	{
+		size= (i == 0 ? state->hbhoptsize : state->destoptsize);
+		if (size == 0 || do_ipv6_option(sock, i, size) != -1)
+			continue;
+		snprintf(line, sizeof(line),
+		"%s{ " DBQ(error) ":" DBQ(%s option failed: %s) " } ] }",
+			state->sent ? " }, " : "",
+			i == 0 ? "hop-by-hop" : "destination",
+			strerror(errno));
+		add_str(state, line);
+		report(state);
+		return -1;
+	}
+	return 0;
+}
+#endif
+
 static void send_pkt(struct trtstate *state)
 {
 	int r, hop, len, on, sock, serrno;
+#ifdef __FreeBSD__
+	int tcpsock;
+#endif
 	uint16_t sum, val;
 	unsigned usum;
 	struct trtbase *base;
@@ -625,6 +738,19 @@ static void send_pkt(struct trtstate *state)
 	}
 	state->seq++;
 
+#ifdef __FreeBSD__
+	/* The raw TCP socket comes from the broker: fetch it before the
+	 * time stamp, so that the round trip to the broker is not part of
+	 * the RTT
+	 */
+	tcpsock= -1;
+	if (state->do_tcp && !state->response_in)
+	{
+		tcpsock= atlas_rawsocket(state->sin6.sin6_family,
+			IPPROTO_TCP);
+	}
+#endif
+
 	gettime_mono(&state->xmit_time);
 
 	if (state->sin6.sin6_family == AF_INET6)
@@ -637,7 +763,11 @@ static void send_pkt(struct trtstate *state)
 				sock= open("/dev/null", O_RDWR);
 			else
 			{
-				sock= socket(AF_INET6, SOCK_RAW, IPPROTO_TCP);
+#ifdef __FreeBSD__
+				sock= tcpsock;
+#else
+				sock= atlas_rawsocket(AF_INET6, IPPROTO_TCP);
+#endif
 			}
 			if (sock == -1)
 			{
@@ -648,7 +778,13 @@ static void send_pkt(struct trtstate *state)
 			setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &on,
 				sizeof(on));
 
-#if 1
+#ifdef __FreeBSD__
+			if (set_ipv6_options(state, sock) == -1)
+			{
+				close(sock);
+				return;
+			}
+#elif 1
 			if (state->hbhoptsize != 0)
 			{
 				do_ipv6_option(sock, 0 /* hbh */,
@@ -823,10 +959,15 @@ static void send_pkt(struct trtstate *state)
 			setsockopt(state->socket_icmp, IPPROTO_IPV6,
 					IPV6_MTU_DISCOVER, &on, sizeof(on));
 
+#ifdef __FreeBSD__
+			if (set_ipv6_options(state, state->socket_icmp) == -1)
+				return;
+#else
 			do_ipv6_option(state->socket_icmp, 0 /* hbh */,
 					 state->hbhoptsize);
 			do_ipv6_option(state->socket_icmp, 1 /* dest */,
 					 state->destoptsize);
+#endif
 
 			icmp6_hdr= (struct icmp6_hdr *)base->packet;
 			icmp6_hdr->icmp6_type= ICMP6_ECHO_REQUEST;
@@ -968,6 +1109,13 @@ static void send_pkt(struct trtstate *state)
 			setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &on,
 				sizeof(on));
 
+#ifdef __FreeBSD__
+			if (set_ipv6_options(state, sock) == -1)
+			{
+				close(sock);
+				return;
+			}
+#else
 			if (state->hbhoptsize != 0)
 			{
 				do_ipv6_option(sock, 0 /* hbh */,
@@ -978,6 +1126,7 @@ static void send_pkt(struct trtstate *state)
 				do_ipv6_option(sock, 1 /* dest */,
 					 state->destoptsize);
 			}
+#endif
 
 			if (set_tos(state, sock, AF_INET6, 1 /*inner*/) == -1)
 			{
@@ -1126,7 +1275,11 @@ static void send_pkt(struct trtstate *state)
 				sock= open("/dev/null", O_RDWR);
 			else
 			{
-				sock= socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+#ifdef __FreeBSD__
+				sock= tcpsock;
+#else
+				sock= atlas_rawsocket(AF_INET, IPPROTO_TCP);
+#endif
 			}
 			if (sock == -1)
 			{
@@ -2874,9 +3027,16 @@ static void ready_tcp4(int __attribute((unused)) unused,
 	}
 	else
 	{
+#ifdef __FreeBSD__
+		/* ready_tcp_bpf put the IPv4 packet in base->packet */
+		nrecv= tcpcap_pkt.len;
+		memcpy(&remote, &tcpcap_pkt.remote, sizeof(remote));
+		(void)slen;
+#else
 		nrecv= recvfrom(state->socket_tcp, base->packet,
 			sizeof(base->packet), MSG_DONTWAIT,
 			(struct sockaddr *)&remote, &slen);
+#endif
 	}
 	if (nrecv == -1)
 	{
@@ -3107,7 +3267,18 @@ static void ready_tcp6(int __attribute((unused)) unused,
 		}
 	}
 	else
+#ifdef __FreeBSD__
+	{
+		/* ready_tcp_bpf put the TCP segment in base->packet, hop
+		 * limit and traffic class come from the IPv6 header
+		 */
+		nrecv= tcpcap_pkt.len;
+		memcpy(&remote, &tcpcap_pkt.remote, sizeof(remote));
+		msg.msg_controllen= 0;
+	}
+#else
 		nrecv= recvmsg(state->socket_tcp, &msg, MSG_DONTWAIT);
+#endif
 	if (nrecv == -1)
 	{
 		/* Strange, read error */
@@ -3152,6 +3323,13 @@ static void ready_tcp6(int __attribute((unused)) unused,
 			rcvdtclass= *(int *)CMSG_DATA(cmsgptr);
 		}
 	}
+#ifdef __FreeBSD__
+	if (!state->response_in)
+	{
+		rcvdttl= tcpcap_pkt.hlim;
+		rcvdtclass= tcpcap_pkt.tclass;
+	}
+#endif
 
 	if (state->response_in)
 	{
@@ -3323,6 +3501,134 @@ static void ready_tcp6(int __attribute((unused)) unused,
 
 	return;
 }
+
+#ifdef __FreeBSD__
+/* Is this IP packet, captured at tv, a copy of a reply that another capture
+ * of the traceroute handed on?  A VLAN parent, or a bridge member or lagg
+ * port that has addresses of its own, sees the frame together with the
+ * interface above it.  Report the reply once, as a Linux raw socket does:
+ * the same bytes from another capture within TCPCAP_SEEN_USEC are a copy.
+ */
+static int tcpcap_copy(struct tcpcap *cap, const struct timeval *tv,
+	const u_char *ip, size_t len)
+{
+	unsigned i;
+	long usec;
+	struct trtstate *state;
+	struct tcpcap_seen *seen;
+
+	state= cap->state;
+	if (state->tcpcap_seen == NULL)
+		return 0;
+	if (len > sizeof(seen->ip))
+		len= sizeof(seen->ip);
+	for (i= 0; i < TCPCAP_SEEN; i++)
+	{
+		seen= &state->tcpcap_seen[i];
+		usec= (tv->tv_sec - seen->tv.tv_sec) * 1000000L +
+			(tv->tv_usec - seen->tv.tv_usec);
+		if (seen->cap != NULL && seen->cap != cap &&
+			usec > -TCPCAP_SEEN_USEC && usec < TCPCAP_SEEN_USEC &&
+			seen->len == len && memcmp(seen->ip, ip, len) == 0)
+		{
+			return 1;
+		}
+	}
+	seen= &state->tcpcap_seen[state->tcpcap_nseen++ % TCPCAP_SEEN];
+	seen->cap= cap;
+	seen->tv= *tv;
+	seen->len= len;
+	memcpy(seen->ip, ip, len);
+	return 0;
+}
+
+/* Replies to TCP probes, read from a BPF capture.  One read returns any
+ * number of packets.  Hand each one to ready_tcp4 or ready_tcp6 in the form
+ * a raw socket delivers it on Linux: the whole IPv4 packet, or the TCP
+ * segment with hop limit and traffic class of the IPv6 header.
+ */
+static void ready_tcp_bpf(int __attribute((unused)) unused,
+	const short __attribute((unused)) event, void *s)
+{
+	int af;
+	unsigned dlt;
+	ssize_t n;
+	size_t len, iplen;
+	struct trtbase *base;
+	struct trtstate *state;
+	const u_char *p, *end, *frame, *ip;
+	struct bpf_hdr bh;
+	struct ip6_hdr ip6;
+	struct sockaddr_in *sin;
+	struct tcpcap *cap;
+	static u_char buf[TCPCAP_BUFSIZE];
+
+	cap= s;
+	state= cap->state;
+	base= state->base;
+	/* report() frees cap */
+	dlt= cap->dlt;
+
+	n= read(cap->fd, buf, sizeof(buf));
+	if (n == -1)
+	{
+		if (errno != EAGAIN && errno != EINTR)
+		{
+			printf("ready_tcp_bpf: read error '%s'\n",
+				strerror(errno));
+		}
+		return;
+	}
+
+	tcpcap_pkt.state= state;
+	p= buf;
+	end= buf + n;
+	while ((frame= tcpcap_next(&p, end, &bh)) != NULL)
+	{
+		af= tcpcap_ip(dlt, frame, bh.bh_caplen, &ip, &iplen);
+		if (af != -1 && tcpcap_copy(cap, &bh.bh_tstamp, ip, iplen))
+			continue;
+
+		memset(&tcpcap_pkt.remote, '\0', sizeof(tcpcap_pkt.remote));
+		if (af == AF_INET)
+		{
+			len= iplen;
+			if (len > sizeof(base->packet))
+				len= sizeof(base->packet);
+			memcpy(base->packet, ip, len);
+			sin= (struct sockaddr_in *)&tcpcap_pkt.remote;
+			sin->sin_len= sizeof(*sin);
+			sin->sin_family= AF_INET;
+			memcpy(&sin->sin_addr, &((const struct ip *)ip)->ip_src,
+				sizeof(sin->sin_addr));
+			tcpcap_pkt.len= len;
+			ready_tcp4(0, 0, state);
+		}
+		else if (af == AF_INET6)
+		{
+			memcpy(&ip6, ip, sizeof(ip6));
+			len= iplen - sizeof(ip6);
+			if (len > sizeof(base->packet))
+				len= sizeof(base->packet);
+			memcpy(base->packet, ip + sizeof(ip6), len);
+			tcpcap_pkt.remote.sin6_len= sizeof(tcpcap_pkt.remote);
+			tcpcap_pkt.remote.sin6_family= AF_INET6;
+			tcpcap_pkt.remote.sin6_addr= ip6.ip6_src;
+			tcpcap_pkt.hlim= ip6.ip6_hlim;
+			tcpcap_pkt.tclass= IP6_TOS(&ip6);
+			tcpcap_pkt.len= len;
+			ready_tcp6(0, 0, state);
+		}
+		else
+			continue;
+
+		/* Stop if report() closed the capture */
+		if (tcpcap_pkt.state != state)
+			break;
+	}
+	tcpcap_pkt.state= NULL;
+}
+#endif /* __FreeBSD__ */
 
 static void ready_callback6(int __attribute((unused)) unused,
 	const short __attribute((unused)) event, void *s)
@@ -4479,6 +4785,9 @@ static void *traceroute_init(int __attribute((unused)) argc, char *argv[],
 	state->resmax= 0;
 	state->socket_icmp= -1;
 	state->socket_tcp= -1;
+#ifdef __FreeBSD__
+	state->socket_tcpbind= -1;
+#endif
 
 	if (response_in || response_out)
 		trt_base->my_pid= 42;
@@ -4636,18 +4945,104 @@ static void traceroute_start2(void *state)
 	}
 }
 
+#ifdef __FreeBSD__
+/* Receive the TCP replies through BPF captures instead of a raw socket */
+static int create_tcp_capture(struct trtstate *state, int af)
+{
+	int i, n, s, on, serrno;
+	const char *what;
+	struct sockaddr_in6 loc;
+	int fds[TCPCAP_MAXIF];
+	unsigned dlts[TCPCAP_MAXIF];
+	char line[120];
+
+	/* Our source address with the source port of the probes, which
+	 * traceroute_start2 sets in loc_sin6 after create_socket returns
+	 */
+	loc= state->loc_sin6;
+	if (af == AF_INET6)
+		loc.sin6_port= htons(SRC_BASE_PORT + state->index);
+	else
+	{
+		((struct sockaddr_in *)&loc)->sin_port=
+			htons(SRC_BASE_PORT + state->index);
+	}
+
+	what= "socket";
+	s= socket(af, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (s != -1)
+	{
+		/* eperd and eooqd may trace from this port at the same
+		 * time, as on Linux, where both raw sockets see all replies
+		 */
+		on= 1;
+		setsockopt(s, SOL_SOCKET, SO_REUSEPORT, &on, sizeof(on));
+		what= "bind";
+		if (bind(s, (struct sockaddr *)&loc, state->loc_socklen) == -1)
+		{
+			serrno= errno;
+			close(s);
+			s= -1;
+			errno= serrno;
+		}
+	}
+	n= 0;
+	if (s != -1)
+	{
+		state->socket_tcpbind= s;
+		what= "tcp capture";
+		n= freebsd_tcp_capture((struct sockaddr *)&loc,
+			(struct sockaddr *)&state->sin6, s, state->interface,
+			fds, dlts);
+		if (n == -1)
+			s= -1;
+	}
+	if (s == -1)
+	{
+		serrno= errno;
+		snprintf(line, sizeof(line),
+			", " DBQ(error) ":\"%s failed: %s\" }", what,
+			serrno == EPROTONOSUPPORT ? "unsupported link type" :
+			serrno == E2BIG ? "too many interfaces" :
+			serrno == ENETDOWN ? "no interface" : strerror(serrno));
+		add_str(state, line);
+		report(state);
+		return -1;
+	}
+
+	state->tcpcap= xmalloc(n * sizeof(*state->tcpcap));
+	state->ntcpcap= n;
+	if (n > 1)
+	{
+		state->tcpcap_seen= xzalloc(TCPCAP_SEEN *
+			sizeof(*state->tcpcap_seen));
+		state->tcpcap_nseen= 0;
+	}
+	for (i= 0; i < n; i++)
+	{
+		state->tcpcap[i].state= state;
+		state->tcpcap[i].fd= fds[i];
+		state->tcpcap[i].dlt= dlts[i];
+		event_assign(&state->tcpcap[i].event, state->base->event_base,
+			fds[i], EV_READ | EV_PERSIST, ready_tcp_bpf,
+			&state->tcpcap[i]);
+		event_add(&state->tcpcap[i].event, NULL);
+	}
+	return 0;
+}
+#endif /* __FreeBSD__ */
+
 static int create_socket(struct trtstate *state, int do_tcp)
 {
-	int af, type, protocol;
+	int af, protocol;
 	int r, on, serrno;
 	char line[80];
 
 	af= (state->do_v6 ? AF_INET6 : AF_INET);
-	type= SOCK_RAW;
 	protocol= (af == AF_INET6 ? IPPROTO_ICMPV6 : IPPROTO_ICMP);
 
 	if (!state->response_in)
-		state->socket_icmp= xsocket(af, type, protocol);
+		state->socket_icmp= xatlas_rawsocket(af, protocol);
 	if (state->socket_icmp == -1)
 	{
 		serrno= errno;
@@ -4729,8 +5124,7 @@ static int create_socket(struct trtstate *state, int do_tcp)
 	if (!state->response_in)
 	{
 		close(state->socket_icmp);
-		state->socket_icmp= xsocket(af, type,
-			protocol);
+		state->socket_icmp= xatlas_rawsocket(af, protocol);
 	}
 	if (state->socket_icmp == -1)
 	{
@@ -4785,10 +5179,14 @@ static int create_socket(struct trtstate *state, int do_tcp)
 
 	if (do_tcp)
 	{
+#ifdef __FreeBSD__
+		if (!state->response_in)
+			return create_tcp_capture(state, af);
+#endif
 		if (state->response_in)
 			state->socket_tcp= open("/dev/null", O_RDWR);
 		else
-			state->socket_tcp= xsocket(af, SOCK_RAW, IPPROTO_TCP);
+			state->socket_tcp= xatlas_rawsocket(af, IPPROTO_TCP);
 		if (state->socket_tcp == -1)
 		{
 			serrno= errno;

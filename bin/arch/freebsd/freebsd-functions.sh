@@ -16,8 +16,10 @@ check_pid()
 }
 kill_perds()
 {
-	# The applets run as busybox: match the name they were started as
-	pkill -9 -f '^([^ ]*/)?(perd|eperd|eooqd)( |$)'
+	# The applets run as busybox: match the name they were started as.
+	# Their raw socket brokers match too but keep root; they exit with
+	# their applet.
+	pkill -9 -f '^([^ ]*/)?(perd|eperd|eooqd)( |$)' 2>/dev/null
 }
 sos()
 {

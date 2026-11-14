@@ -216,3 +216,10 @@ lib-$(CONFIG_FEATURE_FIND_REGEX) += xregcomp.o
 
 # Add the experimental logging functionality, only used by zcip
 lib-$(CONFIG_ZCIP) += logenv.o
+
+# FreeBSD targets (the code is under __FreeBSD__): raw sockets from a root
+# broker, TCP traceroute replies through BPF
+ifneq ($(findstring freebsd,$(shell $(CC) -dumpmachine)),)
+lib-y += freebsd_rawsock.o
+lib-y += freebsd_tcpcap.o
+endif

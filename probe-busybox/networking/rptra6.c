@@ -23,6 +23,7 @@
 #endif
 #include <netinet/ip_icmp.h>
 #include <netinet/icmp6.h>
+#include "atlas_rawsock.h"
 
 #define OPT_STRING	"lsI:P:r:u:"
 
@@ -529,7 +530,7 @@ int rptra6_main(int argc, char *argv[])
 	
 	of= NULL;
 
-	sock = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
+	sock = atlas_rawsocket(AF_INET6, IPPROTO_ICMPV6);
 	if (sock == -1)
 	{
 		printf("socket failed: %s\n", strerror(errno));
