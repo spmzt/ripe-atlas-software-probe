@@ -74,10 +74,11 @@ int dfrm_main(int argc, char *argv[])
 	printf(DBQ(bsize) ": %ld, " DBQ(blocks) ": %ld, "
 		DBQ(bfree) ": %ld, " DBQ(free) ": %ld",
 		(long)sb.f_bsize, (long)sb.f_blocks, (long)sb.f_bfree,
-		(long)sb.f_bfree*(sb.f_bsize/1024));
+		(long)((uint64_t)sb.f_bfree * sb.f_bsize / 1024));
 	printf(" }\n");
 
-	avail= sb.f_bavail*(sb.f_bsize/1024);
+	avail = sb.f_bavail < 0 ? 0 :
+	    (uint64_t)sb.f_bavail * sb.f_bsize / 1024;
 
 	limit= strtoul(limit_str, &check, 10);
 	if (check[0] != '\0')
