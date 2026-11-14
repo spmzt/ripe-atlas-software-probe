@@ -23,13 +23,77 @@
 
 #include "libbb.h"
 
+#ifdef __FreeBSD__
+#include <sys/sysctl.h>
+#include "freebsd_sysinfo.h"
+#else
 #include <sys/sysinfo.h>
+#endif
 
 #define DBQ(str) "\"" #str "\""
 
 /* This is a NOFORK applet. Be very careful! */
 
 int buddyinfo_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+#ifdef __FreeBSD__
+/*
+ * FreeBSD has no /proc/buddyinfo.  Report the free memory in KB as
+ * freemem, with an empty buddyinfo list.  The check for a free block of at
+ * least lowmem KB becomes a check for lowmem KB of free memory.
+ */
+int buddyinfo_main(int argc UNUSED_PARAM, char **argv)
+{
+	char *lowmemChar;
+	unsigned lowmem = 0;
+	char *my_mac ;
+	u_int free_count, page_size;
+	size_t len;
+	unsigned long freeMem;
+	struct sysinfo info; 
+
+	lowmemChar =  argv[1];
+
+	if(lowmemChar) 
+		lowmem = xatou(lowmemChar);
+
+	len = sizeof(free_count);
+	if (sysctlbyname("vm.stats.vm.v_free_count", &free_count, &len,
+		NULL, 0) == -1)
+	{
+		bb_perror_msg("vm.stats.vm.v_free_count");
+		return (EXIT_FAILURE);
+	}
+	len = sizeof(page_size);
+	if (sysctlbyname("vm.stats.vm.v_page_size", &page_size, &len,
+		NULL, 0) == -1)
+	{
+		bb_perror_msg("vm.stats.vm.v_page_size");
+		return (EXIT_FAILURE);
+	}
+	freeMem = (unsigned long)free_count * (page_size / 1024);
+
+        my_mac = getenv("ETHER_SCANNED");
+
+        printf ("RESULT { " DBQ(id) ": " DBQ(9001) ", " DBQ(time) ": %lld",
+		(long long)time(0));
+	if (my_mac !=  NULL)
+		printf(", " DBQ(macaddr) ": " DBQ(%s), my_mac);
+
+	/* get uptime and print it */
+	sysinfo(&info);
+ 	printf (", " DBQ(uptime) ": %ld", info.uptime );
+
+	printf (", " DBQ(buddyinfo) ": [ ], " DBQ(freemem) ": %lu }\n",
+		freeMem);
+
+	if (lowmem >= 4 && freeMem < lowmem)
+	{
+		fprintf(stderr, "buddyinfo: less than %u KB free\n", lowmem);
+		return (EXIT_FAILURE);
+	}
+	return 0;
+}
+#else
 int buddyinfo_main(int argc UNUSED_PARAM, char **argv)
 {
 	char *lowmemChar;
@@ -99,3 +163,4 @@ int buddyinfo_main(int argc UNUSED_PARAM, char **argv)
 	}
 	return 0;
 }
+#endif

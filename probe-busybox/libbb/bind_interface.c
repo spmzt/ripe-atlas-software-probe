@@ -5,6 +5,42 @@
 
 #include "libbb.h"
 
+#ifdef __FreeBSD__
+#include "freebsd_bind_ifaddr.h"
+
+/*
+ * FreeBSD has no SO_BINDTODEVICE (see freebsd_bind_ifaddr.h), and its
+ * bind() wants the exact length of the address.
+ */
+int bind_interface(int socket, int af, char *name)
+{
+	struct sockaddr_in sin;
+	struct sockaddr_in6 sin6;
+
+	if (af == AF_INET)
+	{
+		memset(&sin, '\0', sizeof(sin));
+		sin.sin_family= AF_INET;
+		if (inet_pton(af, name, &sin.sin_addr) == 1)
+		{
+			return bind(socket, (struct sockaddr *)&sin,
+				sizeof(sin));
+		}
+	}
+	else
+	{
+		memset(&sin6, '\0', sizeof(sin6));
+		sin6.sin6_family= AF_INET6;
+		if (inet_pton(af, name, &sin6.sin6_addr) == 1)
+		{
+			return bind(socket, (struct sockaddr *)&sin6,
+				sizeof(sin6));
+		}
+	}
+
+	return bind_ifaddr(socket, af, name);
+}
+#else
 int bind_interface(int socket, int af, char *name)
 {
 	struct sockaddr_storage sa;
@@ -40,3 +76,4 @@ int bind_interface(int socket, int af, char *name)
 	return 0;
 }
 
+#endif

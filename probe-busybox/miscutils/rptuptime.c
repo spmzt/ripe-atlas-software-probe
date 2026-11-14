@@ -20,7 +20,11 @@
 
 #include "libbb.h"
 
+#ifdef __FreeBSD__
+#include "freebsd_sysinfo.h"
+#else
 #include <sys/sysinfo.h>
+#endif
 
 #define DBQ(str) "\"" #str "\""
 

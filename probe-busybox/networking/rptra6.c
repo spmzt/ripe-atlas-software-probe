@@ -18,6 +18,9 @@
 #include "libbb.h"
 
 #include <netinet/in.h>
+#ifdef __FreeBSD__
+#include <netinet/ip.h>
+#endif
 #include <netinet/ip_icmp.h>
 #include <netinet/icmp6.h>
 
@@ -124,7 +127,12 @@ static void do_resolv(char *str_resolv, char *str_resolv_new,
 				}
 				inet_ntop(AF_INET6, ((char *)oh)+i,
 					namebuf, sizeof(namebuf));
+#ifdef __FreeBSD__
+				if (IN6_IS_ADDR_LINKLOCAL(
+					(struct in6_addr *)(((char *)oh)+i))
+#else
 				if (IN6_IS_ADDR_LINKLOCAL(((char *)oh)+i)
+#endif
 					&& interface_name != NULL)
 				{
 					strlcat(namebuf, "%",
@@ -532,12 +540,19 @@ int rptra6_main(int argc, char *argv[])
 	if (str_interface)
 	{
 		interface_name= strdup(str_interface);
+#ifdef __FreeBSD__
+		/* No SO_BINDTODEVICE */
+		printf("binding to an interface is not supported\n");
+		close(sock);
+		return 1;
+#else
 		if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE,
 			str_interface, strlen(str_interface)+1) == -1)
 		{
 			close(sock);
 			return 1;
 		}
+#endif
 	}
 
 	on = 1;

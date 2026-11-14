@@ -14,9 +14,35 @@
 
 #include <assert.h>
 #include <netinet/in.h>
+#ifdef __FreeBSD__
+#include <netinet/ip.h>
+#endif
 #include <netinet/ip_icmp.h>
 #include <netinet/ip6.h>
 #include <netinet/icmp6.h>
+
+#ifdef __FreeBSD__
+/* ready_callback4() uses the Linux struct icmphdr.  FreeBSD has a struct
+ * icmphdr without the echo fields.
+ */
+struct linux_icmphdr
+{
+	uint8_t type;
+	uint8_t code;
+	uint16_t checksum;
+	union
+	{
+		struct
+		{
+			uint16_t id;
+			uint16_t sequence;
+		} echo;
+	} un;
+};
+#define icmphdr linux_icmphdr
+
+#include "freebsd_srcaddr.h"
+#endif
 
 #include "eperd.h"
 #include "atlas_path.h"
@@ -729,10 +755,18 @@ static void ping_xmit(struct pingstate *host)
 		}
 		else
 		{
+#ifdef __FreeBSD__
+			/* FreeBSD refuses a destination address on a
+			 * connected socket
+			 */
+			nsent = send(host->socket, base->packet,
+				host->cursize+ICMP6_HDRSIZE, MSG_DONTWAIT);
+#else
 			nsent = sendto(host->socket, base->packet,
 				host->cursize+ICMP6_HDRSIZE,
 				MSG_DONTWAIT, (struct sockaddr *)&host->sin6,
 				host->socklen);
+#endif
 		}
 
 	}
@@ -743,9 +777,16 @@ static void ping_xmit(struct pingstate *host)
 			host->index, base->pid, &host->cookie,
 			host->include_probe_id);
 
+#ifdef __FreeBSD__
+		/* Keep the source address ping_start2 looked up: the lookup
+		 * does not belong between the time stamp in the packet and
+		 * the send, and on Linux connect() fixes the address as well
+		 */
+#else
 		host->loc_socklen= sizeof(host->loc_sin6);
 		getsockname(host->socket, (struct sockaddr *)&host->loc_sin6,
 			&host->loc_socklen);
+#endif
 
 		if (host->response_in)
 		{
@@ -754,10 +795,15 @@ static void ping_xmit(struct pingstate *host)
 		}
 		else
 		{
+#ifdef __FreeBSD__
+			nsent = send(host->socket, base->packet,
+				host->cursize+ICMP_MINLEN, MSG_DONTWAIT);
+#else
 			nsent = sendto(host->socket, base->packet,
 				host->cursize+ICMP_MINLEN,
 				MSG_DONTWAIT, (struct sockaddr *)&host->sin6,
 				host->socklen);
+#endif
 		}
 	}
 
@@ -1598,6 +1644,11 @@ static void ping_start2(void *state)
 		getsockname(pingstate->socket,
 			(struct sockaddr *)&pingstate->loc_sin6,
 			&pingstate->loc_socklen);
+#ifdef __FreeBSD__
+		freebsd_raw_srcaddr((struct sockaddr *)&pingstate->sin6,
+			pingstate->socklen, &pingstate->loc_sin6,
+			&pingstate->loc_socklen);
+#endif
 		if (pingstate->resp_file_out)
 		{
 			write_response(pingstate->resp_file_out,

@@ -8,7 +8,8 @@
  */
 
 #include "libbb.h"
-#if ENABLE_FEATURE_USE_SENDFILE
+/* FreeBSD's sendfile() only sends to sockets, with other arguments */
+#if ENABLE_FEATURE_USE_SENDFILE && !defined(__FreeBSD__)
 # include <sys/sendfile.h>
 #else
 # define sendfile(a,b,c,d) (-1)

@@ -24,6 +24,9 @@
 #include <string.h>
 #include <sys/time.h>
 #include <stdarg.h>
+#ifdef __FreeBSD__
+#include <sys/utsname.h>
+#endif
 #include "atlasinit.h"
 #include "atlas_path.h"
 
@@ -131,14 +134,25 @@ int atlasinit_main( int argc, char *argv[] )
 static void print_token_ver (FILE * write_to, int flag_rereg) 
 {
 	float root_fs_ver = 0;
+#ifdef __FreeBSD__
+	struct utsname uts;
+#else
 	FILE *fp = xfopen_for_read("/proc/version");
+#endif
 	FILE *fpv;
 	char *my_mac, *path;
 
 	bzero( line, ATLAS_BUF_SIZE );
+#ifdef __FreeBSD__
+	/* No /proc/version: its third word is the kernel release */
+	if (uname(&uts) == -1)
+		bb_perror_msg_and_die("uname");
+	strlcpy(line, uts.release, ATLAS_BUF_SIZE);
+#else
 	fscanf (fp, "%s", line);
 	fscanf (fp, "%s", line);
 	fscanf (fp, "%s", line);
+#endif
 
 	asprintf(&path, "%s/%s", ATLAS_DATADIR, FIRMWARE_APPS_VERSION_REL);
 	fpv = fopen(path, "r");
@@ -160,7 +174,9 @@ static void print_token_ver (FILE * write_to, int flag_rereg)
 	fprintf(write_to, " %d\n", (int)root_fs_ver);
 	if(flag_rereg >  0)
 		fprintf(write_to, "REASON_FOR_REGISTRATION %s\n", str_reason);
+#ifndef __FreeBSD__
 	fclose(fp);
+#endif
 }
 
 static char *skip_session_id(char *start)

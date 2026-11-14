@@ -116,6 +116,10 @@
 #include <netinet/in6.h>
 #endif
 
+#ifdef __FreeBSD__
+#include "../include/freebsd_bind_ifaddr.h"
+#endif
+
 #define EVDNS_LOG_DEBUG EVENT_LOG_DEBUG
 #define EVDNS_LOG_WARN EVENT_LOG_WARN
 #define EVDNS_LOG_MSG EVENT_LOG_MSG
@@ -2534,9 +2538,14 @@ evdns_nameserver_add_impl_(struct evdns_base *base, const struct sockaddr *addre
 	if (ns->socket < 0) { err = 1; goto out1; }
 	if (ns->base->interface_name)
 	{
+#ifdef __FreeBSD__
+		if (bind_ifaddr(ns->socket, address->sa_family,
+			ns->base->interface_name) == -1)
+#else
 		if (setsockopt(ns->socket, SOL_SOCKET, SO_BINDTODEVICE,
 			ns->base->interface_name,
 			strlen(ns->base->interface_name)+1) == -1)
+#endif
 		{
 			err= 2;
 			goto out2;

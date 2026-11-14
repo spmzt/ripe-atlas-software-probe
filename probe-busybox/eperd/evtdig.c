@@ -179,6 +179,9 @@
 #include <netdb.h>
 #include <getopt.h>
 #include <netinet/in.h>
+#ifdef __FreeBSD__
+#include <netinet/ip.h>
+#endif
 #include <netinet/ip_icmp.h>
 #include <arpa/inet.h>
 #include <arpa/nameser.h>
@@ -1991,6 +1994,15 @@ static void process_reply(void * arg, int nrecv, struct timespec now,
 		{
 			if (cmsgptr->cmsg_len == 0)
 				break;	/* Can this happen? */
+#ifdef __FreeBSD__
+			/* FreeBSD reports the TTL as IP_RECVTTL, one byte */
+			if (cmsgptr->cmsg_level == IPPROTO_IP &&
+				cmsgptr->cmsg_type == IP_RECVTTL)
+			{
+				rcvdttl= *(u_char *)CMSG_DATA(cmsgptr);
+				continue;
+			}
+#endif
 			if (cmsgptr->cmsg_level == IPPROTO_IP &&
 				cmsgptr->cmsg_type == IP_TTL)
 			{

@@ -271,7 +271,12 @@ export quiet Q KBUILD_VERBOSE
 # Look for make include files relative to root of kernel src
 MAKEFLAGS += --include-dir=$(srctree)
 
+ifeq ($(shell uname -s),FreeBSD)
+# The FreeBSD base system has no gcc; its compiler is cc
+HOSTCC  	= cc
+else
 HOSTCC  	= gcc
+endif
 HOSTCXX  	= g++
 HOSTCFLAGS	:=
 HOSTCXXFLAGS	:=
@@ -289,7 +294,11 @@ MAKEFLAGS += -rR
 # Make variables (CC, etc...)
 
 AS		= $(CROSS_COMPILE)as
+ifeq ($(shell uname -s),FreeBSD)
+CC		= $(CROSS_COMPILE)cc
+else
 CC		= $(CROSS_COMPILE)gcc
+endif
 LD		= $(CC) -nostdlib
 CPP		= $(CC) -E
 AR		= $(CROSS_COMPILE)ar

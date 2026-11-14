@@ -21,6 +21,11 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef __FreeBSD__
+#include <sys/socket.h>
+#include <sys/sysctl.h>
+#include <ifaddrs.h>
+#endif
 #include <net/route.h>
 #include <net/if.h>
 #include "../eperd/eperd.h"
@@ -217,6 +222,160 @@ static FILE *setup_cache(char *cache_name)
 
 #define MAX_INF	10
 
+#ifdef __FreeBSD__
+/*
+ * FreeBSD has no /proc/net.  Get the addresses with getifaddrs() and the
+ * routes with sysctl(NET_RT_DUMP).  Host routes are not reported: they are
+ * mostly the routes to the local addresses, which Linux keeps in its local
+ * table and does not list either.
+ */
+
+/* Copy a routing socket address, which can be shorter than its type */
+static void sa_copy(void *dst, size_t size, const struct sockaddr *sa)
+{
+	memset(dst, '\0', size);
+	if (sa != NULL)
+		memcpy(dst, sa, sa->sa_len < size ? sa->sa_len : size);
+}
+
+/* Return the routes of family af, their total length in *lenp */
+static char *rt_dump(int af, size_t *lenp)
+{
+	int mib[6];
+	char *buf;
+
+	mib[0]= CTL_NET;
+	mib[1]= PF_ROUTE;
+	mib[2]= 0;
+	mib[3]= af;
+	mib[4]= NET_RT_DUMP;
+	mib[5]= 0;
+	for (;;)
+	{
+		if (sysctl(mib, 6, NULL, lenp, NULL, 0) == -1)
+			return NULL;
+		buf= malloc(*lenp);
+		if (buf == NULL)
+			return NULL;
+		if (sysctl(mib, 6, buf, lenp, NULL, 0) == 0)
+			return buf;
+		free(buf);
+		if (errno != ENOMEM)
+			return NULL;
+		/* The table grew, try again */
+	}
+}
+
+/* Fill rti with the addresses of route message rtm.  Returns -1 for
+ * routes that are not reported.
+ */
+static int rt_addrs(struct rt_msghdr *rtm, int af, struct sockaddr **rti)
+{
+	int i;
+	struct sockaddr *sa;
+
+	if (rtm->rtm_version != RTM_VERSION || !(rtm->rtm_flags & RTF_UP) ||
+		(rtm->rtm_flags & (RTF_HOST|RTF_REJECT|RTF_BLACKHOLE)))
+	{
+		return -1;
+	}
+	sa= (struct sockaddr *)(rtm+1);
+	for (i= 0; i<RTAX_MAX; i++)
+	{
+		rti[i]= NULL;
+		if (rtm->rtm_addrs & (1 << i))
+		{
+			rti[i]= sa;
+			sa= (struct sockaddr *)((char *)sa + SA_SIZE(sa));
+		}
+	}
+	if (rti[RTAX_DST] == NULL || rti[RTAX_DST]->sa_family != af)
+		return -1;
+
+	/* Connected routes have a link-level gateway, Linux reports no
+	 * next hop for them.
+	 */
+	if (rti[RTAX_GATEWAY] != NULL && rti[RTAX_GATEWAY]->sa_family != af)
+		rti[RTAX_GATEWAY]= NULL;
+	return 0;
+}
+
+static int setup_ipv4_rpt(FILE *of)
+{
+	int first;
+	size_t len;
+	char *buf, *p;
+	struct ifaddrs *ifap, *ifa;
+	struct rt_msghdr *rtm;
+	struct sockaddr *rti[RTAX_MAX];
+	struct sockaddr_in addr, mask;
+	char infname[IF_NAMESIZE];
+
+	if (getifaddrs(&ifap) == -1)
+	{
+		report_err("getifaddrs failed");
+		return -1;
+	}
+
+	fprintf(of, DBQ(inet-addresses) ": [ ");
+	first= 1;
+	for (ifa= ifap; ifa != NULL; ifa= ifa->ifa_next)
+	{
+		if (ifa->ifa_addr == NULL ||
+			ifa->ifa_addr->sa_family != AF_INET)
+		{
+			continue;
+		}
+		sa_copy(&addr, sizeof(addr), ifa->ifa_addr);
+		sa_copy(&mask, sizeof(mask), ifa->ifa_netmask);
+		fprintf(of, "%s{ " DBQ(inet-addr) ": " DBQ(%s) ", ",
+			first ? "" : ", ", inet_ntoa(addr.sin_addr));
+		fprintf(of, DBQ(netmask) ": " DBQ(%s) ", " 
+			DBQ(interface) ": " DBQ(%s) " }",
+			inet_ntoa(mask.sin_addr), ifa->ifa_name);
+		first= 0;
+	}
+	freeifaddrs(ifap);
+
+	fprintf(of, " ]");
+
+	buf= rt_dump(AF_INET, &len);
+	if (buf == NULL)
+	{
+		report_err("NET_RT_DUMP failed");
+		return -1;
+	}
+
+	fprintf(of, ", " DBQ(inet-routes) ": [ ");
+	first= 1;
+
+	for (p= buf; p < buf+len; p += rtm->rtm_msglen)
+	{
+		rtm= (struct rt_msghdr *)p;
+		if (rt_addrs(rtm, AF_INET, rti) == -1)
+			continue;
+		if (if_indextoname(rtm->rtm_index, infname) == NULL)
+			strlcpy(infname, "?", sizeof(infname));
+		sa_copy(&addr, sizeof(addr), rti[RTAX_DST]);
+		fprintf(of, "%s{ " DBQ(destination) ": " DBQ(%s) ", ",
+			first ? "" : ", ", inet_ntoa(addr.sin_addr));
+		sa_copy(&addr, sizeof(addr), rti[RTAX_NETMASK]);
+		fprintf(of, DBQ(netmask) ": " DBQ(%s) ", ",
+			inet_ntoa(addr.sin_addr));
+		sa_copy(&addr, sizeof(addr), rti[RTAX_GATEWAY]);
+		fprintf(of, DBQ(next-hop) ": " DBQ(%s) ", "
+			DBQ(interface) ": " DBQ(%s) " }",
+			inet_ntoa(addr.sin_addr), infname);
+		first= 0;
+	}
+
+	fprintf(of, " ]");
+
+	free(buf);
+
+	return 0;
+}
+#else
 static int setup_ipv4_rpt(FILE *of)
 {
 	int i, r, s, first;
@@ -309,6 +468,7 @@ static int setup_ipv4_rpt(FILE *of)
 
 	return 0;
 }
+#endif
 
 static int setup_dhcpv4(FILE *of)
 {
@@ -363,6 +523,163 @@ static int setup_dhcpv4(FILE *of)
 	return -1;
 }
 
+#ifdef __FreeBSD__
+/* Clear the interface index that the kernel embeds in link-local
+ * addresses
+ */
+static void in6_clear_scope(struct in6_addr *a)
+{
+	if (IN6_IS_ADDR_LINKLOCAL(a))
+	{
+		a->s6_addr[2]= 0;
+		a->s6_addr[3]= 0;
+	}
+}
+
+static int in6_prefix_len(const struct in6_addr *mask)
+{
+	int len;
+
+	for (len= 0; len < 128; len++)
+	{
+		if (!(mask->s6_addr[len/8] & (0x80 >> len%8)))
+			break;
+	}
+	return len;
+}
+
+static int setup_ipv6_rpt(FILE *of, char *filename)
+{
+	int r, n, prefix_len;
+	size_t len;
+	char *buf, *p;
+	const char *scope, *flags;
+	struct ifaddrs *ifap, *ifa;
+	struct rt_msghdr *rtm;
+	struct sockaddr *rti[RTAX_MAX];
+	struct sockaddr_in6 sdst6, smask6, snh6;
+	char dst6out[INET6_ADDRSTRLEN];
+	char nh6out[INET6_ADDRSTRLEN];
+	char iface[IF_NAMESIZE];
+	char buf2[1024];
+
+	if (getifaddrs(&ifap) == -1)
+	{
+		report_err("getifaddrs failed");
+		return -1;
+	}
+	n = 0;
+	for (ifa= ifap; ifa != NULL; ifa= ifa->ifa_next)
+	{
+		if (ifa->ifa_addr == NULL ||
+			ifa->ifa_addr->sa_family != AF_INET6)
+		{
+			continue;
+		}
+		sa_copy(&sdst6, sizeof(sdst6), ifa->ifa_addr);
+		sa_copy(&smask6, sizeof(smask6), ifa->ifa_netmask);
+		in6_clear_scope(&sdst6.sin6_addr);
+		inet_ntop(AF_INET6, &sdst6.sin6_addr, dst6out, sizeof(dst6out));
+
+		/* The scopes the Linux code reports */
+		if (IN6_IS_ADDR_LOOPBACK(&sdst6.sin6_addr))
+			scope= "Host";
+		else if (IN6_IS_ADDR_LINKLOCAL(&sdst6.sin6_addr))
+			scope= "Link";
+		else if (IN6_IS_ADDR_SITELOCAL(&sdst6.sin6_addr))
+			scope= "Site";
+		else if (IN6_IS_ADDR_V4COMPAT(&sdst6.sin6_addr))
+			scope= "Compat";
+		else
+			scope= "Global";
+
+		r = snprintf(buf2, sizeof(buf2), "%s %s{" DBQ(inet6-addr) " : "
+				DBQ(%s) ", " DBQ(prefix-length) " : %d,"
+				DBQ(scope) " : " DBQ(%s) ", " DBQ(interface) 
+				" : " DBQ(%s) "}",  
+				n ? "" : ", \"inet6-addresses\" : [", n ? ", " : ""
+				, dst6out, in6_prefix_len(&smask6.sin6_addr)
+				, scope, ifa->ifa_name);
+		n++;
+		if (fwrite(buf2, 1, r, of) != r)
+		{
+			report_err("error writing to '%s'", filename);
+			freeifaddrs(ifap);
+			return -1;
+		}
+	}
+	freeifaddrs(ifap);
+	if (n > 0 && fputs("]", of) == EOF)
+	{
+		report_err("error writing to '%s'", filename);
+		return -1;
+	}
+
+	buf= rt_dump(AF_INET6, &len);
+	if (buf == NULL)
+	{
+		report_err("NET_RT_DUMP failed");
+		return -1;
+	}
+
+	n = 0;
+	for (p= buf; p < buf+len; p += rtm->rtm_msglen)
+	{
+		rtm= (struct rt_msghdr *)p;
+		if (rt_addrs(rtm, AF_INET6, rti) == -1)
+			continue;
+		sa_copy(&sdst6, sizeof(sdst6), rti[RTAX_DST]);
+		if (IN6_IS_ADDR_MULTICAST(&sdst6.sin6_addr))
+			continue;
+		sa_copy(&smask6, sizeof(smask6), rti[RTAX_NETMASK]);
+		sa_copy(&snh6, sizeof(snh6), rti[RTAX_GATEWAY]);
+		in6_clear_scope(&sdst6.sin6_addr);
+		in6_clear_scope(&snh6.sin6_addr);
+		inet_ntop(AF_INET6, &sdst6.sin6_addr, dst6out, sizeof(dst6out));
+		inet_ntop(AF_INET6, &snh6.sin6_addr, nh6out, sizeof(nh6out));
+		prefix_len= in6_prefix_len(&smask6.sin6_addr);
+		if (if_indextoname(rtm->rtm_index, iface) == NULL)
+			strlcpy(iface, "?", sizeof(iface));
+
+		/* Linux reports the flags G, H, D (default route from a
+		 * router advertisement), A (autoconfigured) and C (cache).
+		 * FreeBSD has no flags for D and A: a default route that
+		 * was not added by hand comes from a router advertisement.
+		 * FreeBSD has no route metric either.
+		 */
+		flags= "";
+		if (rtm->rtm_flags & RTF_GATEWAY)
+		{
+			flags= (prefix_len == 0 &&
+				!(rtm->rtm_flags & RTF_STATIC)) ? "GDA" : "G";
+		}
+
+		r = snprintf(buf2, sizeof(buf2), "%s %s{" DBQ(destination) " : "
+				DBQ(%s) ", " DBQ(prefix-length) " : %d,"
+				DBQ(next-hop) " : " DBQ(%s) ", " DBQ(flags)
+				" : " DBQ(%s) ", " DBQ(metric) " : %d , "
+				DBQ(interface) " : " DBQ(%s) "}",
+				n ? "" : ", \"inet6-routes\" : [", n ? ", " : ""
+				, dst6out, prefix_len, nh6out, flags, 0
+				, iface);
+		if (fwrite(buf2, 1, r, of) != r)
+		{
+			report_err("error writing to '%s'", filename);
+			free(buf);
+			return -1;
+		}
+		n++;
+	}
+	free(buf);
+	if (n > 0 && fputs("]", of) == EOF)
+	{
+		report_err("error writing to '%s'", filename);
+		return -1;
+	}
+
+	return 0;
+}
+#else
 static int setup_ipv6_rpt(FILE *of, char *filename)
 {
 	int r, n;
@@ -591,6 +908,7 @@ static int setup_ipv6_rpt(FILE *of, char *filename)
 
 	return 0;
 }
+#endif
 
 static int setup_dns(FILE *of)
 {

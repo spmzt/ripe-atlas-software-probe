@@ -1,4 +1,8 @@
 #include <platform.h>
+#ifndef __FreeBSD__
+/* The Linux route flags, for the Linux code in rptaddrs.  FreeBSD lacks
+ * most of them.
+ */
 #include <net/route.h>
 
 #include "libbb.h"
@@ -40,3 +44,4 @@ void route_set_flags(char *flagstr, int flags)
 	}
 }
 
+#endif

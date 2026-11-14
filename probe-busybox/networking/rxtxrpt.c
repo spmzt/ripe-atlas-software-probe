@@ -27,6 +27,10 @@ table if it has changed.
 #include <string.h>
 
 #include "libbb.h"
+#ifdef __FreeBSD__
+#include <ifaddrs.h>
+#include <net/if.h>
+#endif
 
 #define NEW_FORMAT
 
@@ -83,6 +87,70 @@ int rxtxrpt_main(int argc, char *argv[])
 	return 0;
 }
 
+#ifdef __FreeBSD__
+/* FreeBSD has no /proc/net/dev.  Report the counters of the interfaces'
+ * struct if_data, and 0 for the Linux counters that FreeBSD does not keep.
+ */
+static int rpt_rxtx(void)
+{
+	int i;
+	struct ifaddrs *ifap, *ifa;
+	struct if_data *ifd;
+
+	if (getifaddrs(&ifap) == -1)
+	{
+		report_err("getifaddrs failed");
+		return 1;
+	}
+
+	i= 0;
+	for (ifa= ifap; ifa != NULL; ifa= ifa->ifa_next)
+	{
+		if (ifa->ifa_addr == NULL ||
+			ifa->ifa_addr->sa_family != AF_LINK ||
+			ifa->ifa_data == NULL)
+		{
+			continue;
+		}
+		ifd= ifa->ifa_data;
+
+		printf("%s { " DBQ(name) ": " DBQ(%s) ", ",
+			i == 0 ? "" : ",", ifa->ifa_name);
+
+		printf(DBQ(bytes_recv) ": %llu, ",
+			(unsigned long long)ifd->ifi_ibytes);
+		printf(DBQ(pkt_recv) ": %llu, ",
+			(unsigned long long)ifd->ifi_ipackets);
+		printf(DBQ(errors_recv) ": %llu, ",
+			(unsigned long long)ifd->ifi_ierrors);
+		printf(DBQ(dropped_recv) ": %llu, ",
+			(unsigned long long)ifd->ifi_iqdrops);
+		printf(DBQ(fifo_recv) ": 0, ");
+		printf(DBQ(framing_recv) ": 0, ");
+		printf(DBQ(compressed_recv) ": 0, ");
+		printf(DBQ(multicast_recv) ": %llu, ",
+			(unsigned long long)ifd->ifi_imcasts);
+		printf(DBQ(bytes_sent) ": %llu, ",
+			(unsigned long long)ifd->ifi_obytes);
+		printf(DBQ(pkt_sent) ": %llu, ",
+			(unsigned long long)ifd->ifi_opackets);
+		printf(DBQ(errors_sent) ": %llu, ",
+			(unsigned long long)ifd->ifi_oerrors);
+		printf(DBQ(dropped_sent) ": %llu, ",
+			(unsigned long long)ifd->ifi_oqdrops);
+		printf(DBQ(fifo_sent) ": 0, ");
+		printf(DBQ(collisions_sent) ": %llu, ",
+			(unsigned long long)ifd->ifi_collisions);
+		printf(DBQ(carr_lost_sent) ": 0, ");
+		printf(DBQ(compressed_sent) ": 0");
+		printf(" }");
+		i++;
+	}
+	freeifaddrs(ifap);
+
+	return 0;
+}
+#else
 #ifdef NEW_FORMAT
 static int rpt_rxtx(void)
 {
@@ -227,6 +295,7 @@ static int rpt_rxtx(void)
 	return 0;
 }
 #endif /* NEW_FORMAT */
+#endif
 
 static void report_err(const char *fmt, ...)
 {

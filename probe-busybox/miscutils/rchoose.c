@@ -20,7 +20,9 @@
 
 #include "libbb.h"
 
+#ifndef __FreeBSD__
 #include <sys/sysinfo.h>
+#endif
 
 /* This is a NOFORK applet. Be very careful! */
 

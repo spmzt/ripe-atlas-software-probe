@@ -561,9 +561,16 @@ static void send_pkt(struct ntpstate *state)
 		}
 		else
 		{
+#ifdef __FreeBSD__
+			/* FreeBSD refuses a destination address on a
+			 * connected socket
+			 */
+			r= send(state->socket, base->packet, len, 0);
+#else
 			r= sendto(state->socket, base->packet, len, 0,
 				(struct sockaddr *)&state->sin6,
 				state->socklen);
+#endif
 		}
 
 #if 0
@@ -604,9 +611,13 @@ static void send_pkt(struct ntpstate *state)
 			r= 0;	/* No need to send */
 		else
 		{
+#ifdef __FreeBSD__
+			r= send(state->socket, base->packet, len, 0);
+#else
 			r= sendto(state->socket, base->packet, len, 0,
 				(struct sockaddr *)&state->sin6,
 				state->socklen);
+#endif
 		}
 
 #if 0

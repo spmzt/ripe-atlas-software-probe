@@ -13,8 +13,54 @@
 #include <netinet/ip_icmp.h>
 #include <netinet/ip6.h>
 #include <netinet/icmp6.h>
+#ifdef __FreeBSD__
+/* This file uses the Linux names of the TCP and UDP header fields, which
+ * FreeBSD's headers do not have.  Use the Linux layout.
+ */
+struct tcphdr
+{
+	uint16_t source;
+	uint16_t dest;
+	uint32_t seq;
+	uint32_t ack_seq;
+#if BYTE_ORDER == LITTLE_ENDIAN
+	uint16_t res1:4, doff:4, fin:1, syn:1, rst:1, psh:1, ack:1, urg:1,
+		res2:2;
+#else
+	uint16_t doff:4, res1:4, res2:2, urg:1, ack:1, psh:1, rst:1, syn:1,
+		fin:1;
+#endif
+	uint16_t window;
+	uint16_t check;
+	uint16_t urg_ptr;
+};
+
+struct udphdr
+{
+	uint16_t source;
+	uint16_t dest;
+	uint16_t len;
+	uint16_t check;
+};
+
+/* No path MTU discovery modes, only the don't fragment flag */
+#define SOL_IPV6		IPPROTO_IPV6
+#define IP_MTU_DISCOVER		IP_DONTFRAG
+#define IP_PMTUDISC_DO		1
+#define IP_PMTUDISC_DONT	0
+#define IPV6_MTU_DISCOVER	IPV6_DONTFRAG
+#define IPV6_PMTUDISC_DO	1
+#define IPV6_PMTUDISC_DONT	0
+
+/* The Linux names of ICMP types */
+#define ICMP_DEST_UNREACH	ICMP_UNREACH
+#define ICMP_TIME_EXCEEDED	ICMP_TIMXCEED
+
+#include "freebsd_srcaddr.h"
+#else
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
+#endif
 
 #include "eperd.h"
 #include "atlas_path.h"
@@ -626,9 +672,21 @@ static void send_pkt(struct trtstate *state)
 				r= 0;	/* No need to bind */
 			else
 			{
+#ifdef __FreeBSD__
+				/* FreeBSD binds a raw socket only to an
+				 * address without a port
+				 */
+				struct sockaddr_in6 loc_sin6;
+
+				loc_sin6= state->loc_sin6;
+				loc_sin6.sin6_port= 0;
+				r= bind(sock, (struct sockaddr *)&loc_sin6,
+					state->loc_socklen);
+#else
 				r= bind(sock,
 					(struct sockaddr *)&state->loc_sin6,
 					state->loc_socklen);
+#endif
 			}
 			if (r == -1)
 			{
@@ -1090,9 +1148,18 @@ static void send_pkt(struct trtstate *state)
 				r= 0;
 			else
 			{
+#ifdef __FreeBSD__
+				struct sockaddr_in6 loc_sin6;
+
+				loc_sin6= state->loc_sin6;
+				((struct sockaddr_in *)&loc_sin6)->sin_port= 0;
+				r= bind(sock, (struct sockaddr *)&loc_sin6,
+					state->loc_socklen);
+#else
 				r= bind(sock,
 					(struct sockaddr *)&state->loc_sin6,
 					state->loc_socklen);
+#endif
 			}
 #if 0
  { static int doit=1; if (doit && r != -1)
@@ -4648,6 +4715,10 @@ static int create_socket(struct trtstate *state, int do_tcp)
 		{
 			crondlog(DIE9 "getsockname failed");
 		}
+#ifdef __FreeBSD__
+		freebsd_raw_srcaddr((struct sockaddr *)&state->sin6,
+			state->socklen, &state->loc_sin6, &state->loc_socklen);
+#endif
 	}
 	if (state->resp_file_out)
 	{

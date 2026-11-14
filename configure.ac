@@ -7,6 +7,16 @@ AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE([foreign])
 AM_SILENT_RULES([yes])
 
+AC_CANONICAL_HOST
+case "${host_os}" in
+freebsd*)
+	host_freebsd=true
+	;;
+*)
+	host_freebsd=false
+	;;
+esac
+
 AC_ARG_ENABLE([hwprobe],
 	      [AS_HELP_STRING([--enable-hwprobe], [configure build specific for hardware probes @<:@default=no@:>@])],
 	      [case "${enableval}" in
@@ -87,6 +97,11 @@ fi
 
 AC_PATH_PROG(SETCAP, setcap)
 AC_ARG_ENABLE([setcap-install], [AC_HELP_STRING([--enable-setcap-install], [install measurements with cap_net_raw @<:@default=yes@:>@])], [enable_setcap_install="${enableval}"],[enable_setcap_install=yes])
+
+# FreeBSD has no file capabilities
+if test "x${host_freebsd}" = 'xtrue'; then
+	enable_setcap_install=no
+fi
 
 AC_MSG_CHECKING([whether to install measurements with cap_net_raw capabilities])
 if test "x${enable_setcap_install}" = 'xno'; then

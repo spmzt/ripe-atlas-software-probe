@@ -25,7 +25,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __FreeBSD__
+#include <sys/mount.h>
+#else
 #include <sys/vfs.h>
+#endif
 
 #include "libbb.h"
 

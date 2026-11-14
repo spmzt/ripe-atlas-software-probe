@@ -134,7 +134,11 @@
 #ifdef ATLAS
 #include <string.h>
 #include <unistd.h>
+#ifdef __FreeBSD__
+#define LINUX_REBOOT_CMD_RESTART	RB_AUTOBOOT
+#else
 #include <linux/reboot.h>
+#endif
 
 #define LOGIN_PREFIX	"Atlas probe, see http://atlas.ripe.net/\r\n\r\n"
 #define LOGIN_PROMPT	" login: "
@@ -1188,7 +1192,15 @@ do_cmd:
 			{
 				free(line); line= NULL;
 
+#ifdef __FreeBSD__
+				/* FreeBSD's mount() needs the file system type
+				 * to remount, and a software probe does not
+				 * remount /.  Fail as Linux does without root.
+				 */
+				r= -1;
+#else
 				r= mount(NULL, "/", NULL, MS_REMOUNT, NULL);
+#endif
 				if (r == -1)
 				{
 					add_2sock(ts, BAD_REMOUNT);
